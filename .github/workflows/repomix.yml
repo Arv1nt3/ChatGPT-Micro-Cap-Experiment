@@ -1,0 +1,115 @@
+name: Generate Repomix Output
+
+on:
+  workflow_dispatch:
+    inputs:
+      output_filename:
+        description: 'Output filename (without extension)'
+        required: false
+        default: 'repomix-output'
+        type: string
+      include_patterns:
+        description: 'Include patterns (comma-separated)'
+        required: false
+        default: ''
+        type: string
+      exclude_patterns:
+        description: 'Exclude patterns (comma-separated)'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  repomix:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js with npm cache
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        
+    - name: Cache global npm packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.npm-global
+        key: npm-global-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}-repomix
+        restore-keys: |
+          npm-global-${{ runner.os }}-repomix
+          npm-global-${{ runner.os }}-
+          
+    - name: Configure npm to use cached directory
+      run: |
+        mkdir -p ~/.npm-global
+        npm config set prefix '~/.npm-global'
+        echo "$HOME/.npm-global/bin" >> $GITHUB_PATH
+        
+    - name: Check if repomix is installed and install if needed
+      run: |
+        if command -v repomix &> /dev/null; then
+          echo "✅ Repomix already installed: $(repomix --version)"
+        else
+          echo "📦 Installing repomix..."
+          npm install -g repomix
+          echo "✅ Repomix installed: $(repomix --version)"
+        fi
+        
+    - name: Create repomix config
+      run: |
+        cat > repomix.config.json << EOF
+        {
+          "output": {
+            "filePath": "${{ inputs.output_filename || 'repomix-output' }}.txt",
+            "style": "markdown"
+          },
+          "include": [$(if [ -n "${{ inputs.include_patterns }}" ]; then echo "\"$(echo "${{ inputs.include_patterns }}" | sed 's/,/","/g')\""; else echo "\"**/*\""; fi)],
+          "exclude": [
+            ".git/**",
+            "node_modules/**",
+            "*.log",
+            ".env*",
+            "dist/**",
+            "build/**"$(if [ -n "${{ inputs.exclude_patterns }}" ]; then echo ",\"$(echo "${{ inputs.exclude_patterns }}" | sed 's/,/","/g')\""; fi)
+          ],
+          "security": {
+            "enableSecurityCheck": true
+          }
+        }
+        EOF
+        
+    - name: Run repomix
+      run: repomix --config repomix.config.json
+      
+    - name: Display output file info
+      run: |
+        OUTPUT_FILE="${{ inputs.output_filename || 'repomix-output' }}.txt"
+        if [ -f "$OUTPUT_FILE" ]; then
+          echo "✅ Repomix output generated successfully!"
+          echo "📁 File: $OUTPUT_FILE"
+          echo "📏 Size: $(du -h "$OUTPUT_FILE" | cut -f1)"
+          echo "📄 Lines: $(wc -l < "$OUTPUT_FILE")"
+          echo ""
+          echo "🔍 First 10 lines of output:"
+          head -10 "$OUTPUT_FILE"
+        else
+          echo "❌ Output file not found!"
+          exit 1
+        fi
+        
+    - name: Upload repomix output as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: repomix-output-${{ github.run_number }}
+        path: ${{ inputs.output_filename || 'repomix-output' }}.txt
+        retention-days: 1
+        
+    - name: Upload config as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: repomix-config-${{ github.run_number }}
+        path: repomix.config.json
+        retention-days: 1
